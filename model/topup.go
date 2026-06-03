@@ -412,6 +412,10 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 			return ErrPaymentMethodMismatch
 		}
 
+		if topUp.Status == common.TopUpStatusSuccess {
+			return nil // 幂等：已成功直接返回
+		}
+
 		if topUp.Status != common.TopUpStatusPending {
 			return errors.New("充值订单状态错误")
 		}
@@ -423,8 +427,8 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 			return err
 		}
 
-		// Creem 直接使用 Amount 作为充值额度（整数）
-		quota = topUp.Amount
+		// 计算充值额度：Amount * QuotaPerUnit
+		quota = decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart()
 
 		// 构建更新字段，优先使用邮箱，如果邮箱为空则使用用户名
 		updateFields := map[string]interface{}{

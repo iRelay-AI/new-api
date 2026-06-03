@@ -1,4 +1,6 @@
-# CLAUDE.md — Project Conventions for new-api
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Overview
 
@@ -13,9 +15,41 @@ This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI pro
 - **Auth**: JWT, WebAuthn/Passkeys, OAuth (GitHub, Discord, OIDC, etc.)
 - **Frontend package manager**: Bun (preferred over npm/yarn/pnpm)
 
+## Common Commands
+
+### Backend (Go)
+
+- Build production binary: `go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api`
+- Run locally: `go run main.go` (reads `.env` for config)
+- Run all tests: `go test ./...`
+- Run a single test: `go test -run TestFunctionName ./package/`
+- Run tests in one package: `go test ./service/`
+
+### Frontend (`web/default/`)
+
+- Install dependencies: `bun install`
+- Dev server: `bun run dev` (proxies API to localhost:3000)
+- Production build: `bun run build`
+- Type check: `bun run typecheck`
+- Lint: `bun run lint`
+- Format: `bun run format`
+- i18n sync: `bun run i18n:sync`
+
+### Full-Stack Development
+
+- `make dev` — Start backend (Docker with PostgreSQL + Redis) and frontend dev server
+- `make dev-api` — Start backend services only (Docker Compose with PostgreSQL, Redis)
+- `make dev-web` — Start frontend dev server only
+- `make dev-api-rebuild` — Rebuild and restart Go backend container
+- `make reset-setup` — Reset local setup wizard state (SQLite or Docker PostgreSQL)
+- `make build-frontend` — Build default frontend for production
+- `make build-frontend-classic` — Build classic frontend for production
+
+The dev stack uses `docker-compose.dev.yml` (PostgreSQL + Redis on port 3000, frontend dev on port 3001).
+
 ## Architecture
 
-Layered architecture: Router -> Controller -> Service -> Model
+### Layered Directory Structure
 
 ```
 router/        — HTTP routing (API, relay, dashboard, web)
@@ -32,12 +66,48 @@ constant/      — Constants (API types, channel types, context keys)
 types/         — Type definitions (relay formats, file sources, errors)
 i18n/          — Backend internationalization (go-i18n, en/zh)
 oauth/         — OAuth provider implementations
-pkg/           — Internal packages (cachex, ionet)
-web/             — Frontend themes container
- web/default/   — Default frontend (React 19, Rsbuild, Base UI, Tailwind)
+pkg/           — Internal packages (cachex, ionet, billingexpr)
+web/
+  web/default/   — Default frontend (React 19, Rsbuild, Base UI, Tailwind)
   web/classic/   — Classic frontend (React 18, Vite, Semi Design)
-  web/default/src/i18n/ — Frontend internationalization (i18next, zh/en/fr/ru/ja/vi)
 ```
+
+### Request Flow
+
+1. **Router** (`router/`) — Gin routes group into API, dashboard, relay, and web routers.
+2. **Middleware** (`middleware/`) — Auth, rate limiting, i18n, logging, and channel selection run before the controller.
+3. **Controller** (`controller/relay.go`) — `Relay()` builds a `RelayInfo` from the request and dispatches to the correct handler (`relayHandler`, `geminiRelayHandler`, etc.).
+4. **Relay Helper** (`relay/helper_*.go` or `relay/text_helper.go`) — Handles format-specific logic (chat, images, audio, embeddings, rerank, responses, realtime). Converts OpenAI-format requests to provider-native format.
+5. **Adaptor** (`relay/channel/*/`) — Each provider implements `channel.Adaptor` with methods: `Init`, `GetRequestURL`, `SetupRequestHeader`, `Convert*Request`, `DoRequest`, `DoResponse`, `GetModelList`.
+6. **Adaptor Factory** (`relay/relay_adaptor.go`) — `GetAdaptor(apiType)` returns the correct provider adaptor. Add new providers here.
+
+### Channel Selection & Retry
+
+- Channel selection happens in middleware (`middleware/distributor.go`).
+- The system selects a channel based on model, group, and weight.
+- If a request fails, `service.ShouldDisableChannel()` decides whether to auto-disable the channel, and retry logic may pick another channel.
+- `ChannelMeta` inside `RelayInfo` carries the selected channel's type, ID, base URL, API key, and model mappings.
+
+### Embedded Frontends
+
+Both frontends are embedded into the Go binary at build time:
+
+```go
+//go:embed web/default/dist
+var buildFS embed.FS
+
+//go:embed web/default/dist/index.html
+var indexPage []byte
+```
+
+`router.SetWebRouter()` serves the embedded SPA with assetFS.
+
+### Billing Flow
+
+- **Pre-consume**: Before upstream request, `BillingSession` pre-charges quota based on estimated tokens.
+- **Upstream request**: Request is sent via adaptor.
+- **Post-consume**: After response, actual usage is calculated and the delta is settled (refund or supplement).
+- **Tiered billing**: When `billing_mode` is `"tiered_expr"`, expressions from `pkg/billingexpr/` are evaluated. See Rule 7.
 
 ## Internationalization (i18n)
 
@@ -104,7 +174,7 @@ Use `bun` as the preferred package manager and script runner for the frontend (`
 
 When implementing a new channel:
 - Confirm whether the provider supports `StreamOptions`.
-- If supported, add the channel to `streamSupportedChannels`.
+- If supported, add the channel to `streamSupportedChannels` in `relay/common/relay_info.go`.
 
 ### Rule 5: Protected Project Information — DO NOT Modify or Delete
 
