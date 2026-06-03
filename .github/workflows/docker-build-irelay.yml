@@ -49,8 +49,8 @@ jobs:
             cyijun/irelay_new_api:latest-${{ matrix.arch }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: false
-          sbom: false
+          provenance: mode=max
+          sbom: true
 
   create_manifests:
     name: Create multi-arch manifest (Docker Hub)
